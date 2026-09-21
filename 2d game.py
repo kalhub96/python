@@ -360,6 +360,7 @@ ENEMY_WEAPONS = {
     }
 }
 
+
 # ============================================================
 # ENEMY SPAWN PROBABILITY
 # ============================================================
@@ -692,58 +693,96 @@ def choose_upgrade(index):
 # ============================================================
 
 def generate_walls(amount=10):
-
+    
     walls = []
-
+    
+    MIN_WALL_WIDTH = 80 
+    MAX_WALL_WIDTH = 180
+    
+    MIN_WALL_HEIGHT = 50
+    MAX_WALL_HEIGHT = 120
+    
+    MIN_WALL_GAP = 45
+    
     for _ in range(amount):
-
-        for _ in range(100):
-
+        
+        placed = False
+        
+        for _ in range(200):
+            
             width = random.randint(
-                80,
-                180
+                MIN_WALL_WIDTH,
+                MAX_WALL_WIDTH
             )
-
+            
             height = random.randint(
-                50,
-                120
+                MIN_WALL_HEIGHT,
+                MAX_WALL_HEIGHT
             )
-
+            
             x = random.randint(
-                PLAY_AREA.left + 20,
-                PLAY_AREA.right - width - 20
+                PLAY_AREA.left + 30,
+                PLAY_AREA.right - width - 30
             )
-
+            
             y = random.randint(
-                PLAY_AREA.top + 20,
-                PLAY_AREA.bottom - height - 20
+                PLAY_AREA.top + 30,
+                PLAY_AREA.bottom - height - 30
             )
-
+            
             wall = pg.Rect(
-                x,
-                y,
-                width,
+                x, 
+                y, 
+                width, 
                 height
             )
-
-            if wall.colliderect(SAFE_ZONE):
+            
+            # --------------------------------------------
+            # Keep safe zone clear
+            # --------------------------------------------
+            
+            if wall.colliderect(
+                SAFE_ZONE
+            ):
                 continue
-
-            if wall.colliderect(player):
+            
+            # --------------------------------------------
+            # Keep player clear
+            # --------------------------------------------
+            
+            if wall.colliderect(
+                player
+            ):
                 continue
-
+            
+            # --------------------------------------------
+            # Keep a minimum gap between walls
+            # --------------------------------------------
+            
+            padded_wall = wall.inflate(
+                MIN_WALL_GAP * 2,
+                MIN_WALL_GAP * 2
+            )
+            
             if any(
-                wall.colliderect(existing_wall)
+                padded_wall.colliderect(
+                    existing_wall
+                )
                 for existing_wall in walls
             ):
                 continue
-
-            walls.append(wall)
-
+            
+            walls.append(
+                wall
+            )
+            
+            placed = True
             break
-
-    return walls
-
+        
+        if not placed:
+            break
+        
+        return walls
 
 # ============================================================
 # COLLISION MOVEMENT
@@ -3156,6 +3195,60 @@ class Enemy:
                 2
             )
 
+# ============================================================
+# MAP CONNECTIVITY
+# ============================================================
+
+def is_grid_connected(grid, start):
+    
+    if not grid:
+        return False
+    
+    grid_height = len(grid)
+    grid_width = len(grid[0])
+    
+    start_x, start_y = start
+    
+    if not (
+        0 <= start_x < grid_width
+        and
+        0 <= start_y < grid_height
+    ):
+        
+        return False
+    
+    if not grid[start_y][start_x]:
+        return False
+    
+    visited = set()
+    stack = [start]
+    
+    while stack:
+        
+        current = stack.pop()
+        
+        if current in visited:
+            continue
+        
+        visited.add(current)
+        
+        for neighbor in get_neighbors(
+            current,
+            grid
+        ):
+            
+            if neighbor not in visited:
+                stack.append(neighbor)
+    
+    # Count every walkable cell
+    walkable_cell = 0
+    
+    for row in grid:
+        for cell in row:
+            if cell:
+                walkable_cell += 1
+    
+    return len(visited) == walkable_cell
 
 # ============================================================
 # SPAWN ENEMY
@@ -3209,6 +3302,51 @@ def spawn_enemy(
 
         if enemy_rect.colliderect(
             player_rect
+        ):
+            continue
+
+        # Prevent enemies from spawning on top of existing enemies.
+        # A small padding keeps newly spawned enemies from touching
+        # or immediately overlapping each other.
+        spawn_padding = 5
+        padded_enemy_rect = enemy_rect.inflate(
+            spawn_padding * 2,
+            spawn_padding * 2
+        )
+
+        if any(
+            padded_enemy_rect.colliderect(enemy.rect)
+            for enemy in enemies
+            if enemy.health > 0
+        ):
+            continue
+
+        # ----------------------------------------------------
+        # Reject unreachable / enclosed spawn locations
+        # ----------------------------------------------------
+        # A spawn can avoid every wall and still be trapped
+        # inside a closed group of walls. Use the enemy's
+        # size-aware A* grid to verify that it can reach the
+        # player's current position before accepting the spawn.
+        navigation_grid = navigation_grids.get(
+            enemy_type
+        )
+
+        if navigation_grid is None:
+            continue
+
+        spawn_cell = world_to_grid(
+            enemy_rect.center
+        )
+
+        player_cell = world_to_grid(
+            player_rect.center
+        )
+
+        if not a_star(
+            spawn_cell,
+            player_cell,
+            navigation_grid
         ):
             continue
 
@@ -3288,29 +3426,82 @@ def spawn_next_wave_enemy():
 
 
 # ============================================================
-# WORLD
+# WORLD + NAVIGATION GRIDS
 # ============================================================
 
-walls = generate_walls(
+def generate_valid_world(
+    wall_amount=10,
+    max_attempts=100
+):
+    
+    for attempt in range(max_attempts):
+        
+        candidate_walls = generate_walls(
+            wall_amount
+        )
+        
+        candidate_grids = {}
+        
+        valid = True
+        
+        # Build a navigation grid for every enemy type
+        for enemy_type, data in ENEMY_TYPES.items():
+            
+            grid = create_navigation_grid(
+                candidate_walls,
+                data["size"]
+            )
+            
+            candidate_grids[
+                enemy_type
+            ] = grid
+            
+            player_grid = world_to_grid(
+                player.center
+            )
+            
+            if not is_grid_connected(
+                grid,
+                player_grid
+            ):
+                
+                valid = False
+                break
+            
+            if valid:
+                
+                return(
+                    candidate_walls,
+                    candidate_grids
+                )
+    # Fallback
+    print(
+        "WARNING: Could not generate a fully connected map."
+    )
+    
+    fallback_wall = generate_walls(
+        wall_amount
+    )
+    
+    fallback_grids = {}
+    
+    for enemy_type, data in ENEMY_TYPES.items():
+        
+        fallback_grids[
+            enemy_type
+        ] = create_navigation_grid(
+            fallback_wall,
+            data["size"]
+        )
+    
+    return (
+        fallback_wall,
+        fallback_grids
+    )
+    
+walls, navigation_grids = generate_valid_world(
     10
 )
-
-
-# ============================================================
-# NAVIGATION GRIDS
-# ============================================================
-
-navigation_grids = {}
-
-for enemy_type, data in ENEMY_TYPES.items():
-
-    navigation_grids[
-        enemy_type
-    ] = create_navigation_grid(
-        walls,
-        data["size"]
-    )
-
 
 # ============================================================
 # MAP DRAWING
@@ -3326,39 +3517,6 @@ def draw_map(screen):
         screen,
         (35, 35, 42),
         PLAY_AREA
-    )
-
-    pg.draw.rect(
-        screen,
-        (25, 70, 55),
-        SAFE_ZONE
-    )
-
-    pg.draw.rect(
-        screen,
-        (70, 200, 120),
-        SAFE_ZONE,
-        3
-    )
-
-    font = pg.font.SysFont(
-        None,
-        22
-    )
-
-    safe_text = font.render(
-        "SAFE ZONE",
-        True,
-        (150, 255, 180)
-    )
-
-    safe_rect = safe_text.get_rect(
-        center=SAFE_ZONE.center
-    )
-
-    screen.blit(
-        safe_text,
-        safe_rect
     )
 
     for wall in walls:
