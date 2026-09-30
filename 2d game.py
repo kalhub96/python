@@ -152,6 +152,13 @@ WEAPON = {
 
 weapon_fire_timer = 0.0
 
+# ============================================================
+# AMMO
+# ============================================================
+
+MAX_AMMO = 100
+AMMO_PICKUP_AMOUNT = 20
+player_ammo = MAX_AMMO
 
 # ============================================================
 # PLAYER UPGRADES
@@ -693,96 +700,96 @@ def choose_upgrade(index):
 # ============================================================
 
 def generate_walls(amount=10):
-    
+
     walls = []
-    
-    MIN_WALL_WIDTH = 80 
+
+    MIN_WALL_WIDTH = 80
     MAX_WALL_WIDTH = 180
-    
+
     MIN_WALL_HEIGHT = 50
     MAX_WALL_HEIGHT = 120
+
+    # Smaller gap so more walls can fit
+    MIN_WALL_GAP = 20
     
-    MIN_WALL_GAP = 45
-    
+    MAP_SECTORS_X = 4
+    MAP_SECTORS_Y = 3
+
     for _ in range(amount):
-        
+
         placed = False
-        
-        for _ in range(200):
-            
+
+        for _ in range(300):
+
             width = random.randint(
                 MIN_WALL_WIDTH,
                 MAX_WALL_WIDTH
             )
-            
+
             height = random.randint(
                 MIN_WALL_HEIGHT,
                 MAX_WALL_HEIGHT
             )
-            
+
             x = random.randint(
                 PLAY_AREA.left + 30,
                 PLAY_AREA.right - width - 30
             )
-            
+
             y = random.randint(
                 PLAY_AREA.top + 30,
                 PLAY_AREA.bottom - height - 30
             )
-            
+
             wall = pg.Rect(
-                x, 
-                y, 
-                width, 
+                x,
+                y,
+                width,
                 height
             )
-            
-            # --------------------------------------------
-            # Keep safe zone clear
-            # --------------------------------------------
-            
-            if wall.colliderect(
-                SAFE_ZONE
-            ):
+
+            # Don't place inside safe zone
+            if wall.colliderect(SAFE_ZONE):
                 continue
-            
-            # --------------------------------------------
-            # Keep player clear
-            # --------------------------------------------
-            
-            if wall.colliderect(
-                player
-            ):
+
+            # Don't overlap player
+            if wall.colliderect(player):
                 continue
-            
-            # --------------------------------------------
-            # Keep a minimum gap between walls
-            # --------------------------------------------
-            
+
+            # Keep walls from overlapping
             padded_wall = wall.inflate(
                 MIN_WALL_GAP * 2,
                 MIN_WALL_GAP * 2
             )
-            
-            if any(
-                padded_wall.colliderect(
-                    existing_wall
+
+            overlap = False
+
+            for existing_wall in walls:
+
+                existing_padded = existing_wall.inflate(
+                    MIN_WALL_GAP * 2,
+                    MIN_WALL_GAP * 2
                 )
-                for existing_wall in walls
-            ):
+
+                if padded_wall.colliderect(
+                    existing_padded
+                ):
+                    overlap = True
+                    break
+
+            if overlap:
                 continue
-            
-            walls.append(
-                wall
-            )
-            
+
+            walls.append(wall)
             placed = True
             break
-        
+
+        # Don't stop generating the whole map
+        # if one wall fails to place.
         if not placed:
-            break
-        
-        return walls
+            continue
+
+    return walls
 
 # ============================================================
 # COLLISION MOVEMENT
@@ -889,112 +896,98 @@ def create_navigation_grid(
     enemy_size
 ):
 
-    grid_width = math.ceil(
-        PLAY_AREA.width
-        / GRID_SIZE
-    )
-
-    grid_height = math.ceil(
-        PLAY_AREA.height
-        / GRID_SIZE
-    )
+    grid_width = PLAY_AREA.width // GRID_SIZE
+    grid_height = PLAY_AREA.height // GRID_SIZE
 
     grid = []
 
-    clearance = enemy_size / 2
+    half_size = enemy_size / 2
 
-    for y in range(grid_height):
+    for gy in range(grid_height):
 
         row = []
 
-        for x in range(grid_width):
+        for gx in range(grid_width):
 
-            cell_center = grid_to_world(
-                (x, y)
+            cell_center = pg.Vector2(
+                PLAY_AREA.left
+                + gx * GRID_SIZE
+                + GRID_SIZE / 2,
+
+                PLAY_AREA.top
+                + gy * GRID_SIZE
+                + GRID_SIZE / 2
+            )
+
+            # Create an imaginary enemy at this cell
+            enemy_rect = pg.Rect(
+                round(cell_center.x - half_size),
+                round(cell_center.y - half_size),
+                enemy_size,
+                enemy_size
             )
 
             blocked = False
 
-            for wall in walls:
+            # Enemy must fit completely inside play area
+            if not PLAY_AREA.contains(enemy_rect):
+                blocked = True
 
-                expanded_wall = wall.inflate(
-                    clearance * 2,
-                    clearance * 2
-                )
+            # Enemy's FULL body must not touch a wall
+            if not blocked:
 
-                if expanded_wall.collidepoint(
-                    round(cell_center.x),
-                    round(cell_center.y)
-                ):
+                for wall in walls:
 
-                    blocked = True
-                    break
+                    if enemy_rect.colliderect(wall):
+                        blocked = True
+                        break
 
-            row.append(
-                not blocked
-            )
+            row.append(not blocked)
 
         grid.append(row)
 
-    return grid
-
+    return grid        
 
 def get_neighbors(
     node,
     grid
 ):
-
+    
     x, y = node
-
+    
+    height = len(grid)
+    width = len(grid[0])
+    
     directions = [
-        (1, 0),
-        (-1, 0),
-        (0, 1),
-        (0, -1),
-        (1, 1),
-        (1, -1),
-        (-1, 1),
-        (-1, -1)
+        (1, 0),  # right
+        (-1, 0), # left
+        (0, 1),  # down
+        (0, -1)  # up
     ]
-
+    
     neighbors = []
-
-    if not grid:
-        return neighbors
-
-    grid_height = len(grid)
-    grid_width = len(grid[0])
-
+    
     for dx, dy in directions:
-
+        
         nx = x + dx
         ny = y + dy
-
+        
         if not (
-            0 <= nx < grid_width
+            0 <= nx < width
             and
-            0 <= ny < grid_height
+            0 <= ny < height
         ):
             continue
-
+        
         if not grid[ny][nx]:
             continue
-
-        if dx != 0 and dy != 0:
-
-            if not grid[y][nx]:
-                continue
-
-            if not grid[ny][x]:
-                continue
-
+        
         neighbors.append(
             (nx, ny)
         )
-
+        
     return neighbors
-
-
+        
 def heuristic(a, b):
 
     return max(
@@ -1615,6 +1608,11 @@ class Enemy:
         self.search_timer = 0.0
         self.search_target = None
 
+        # Search behavior:
+        # 1. Go to the last known player position.
+        # 2. Then investigate nearby search points.
+        self.searched_last_known_position = False
+
         # ----------------------------------------------------
         # Path
         # ----------------------------------------------------
@@ -1622,7 +1620,8 @@ class Enemy:
         self.path = []
         self.path_index = 0
 
-        self.path_update_timer = 0
+        self.path_update_timer = 0.0
+        self.stuck_timer = 0.0
         self.path_update_interval = 0.25
 
         if player_position is not None:
@@ -1847,6 +1846,7 @@ class Enemy:
                 self.search_timer = SEARCH_TIME
 
                 self.search_target = None
+                self.searched_last_known_position = False
 
                 self.path = []
                 self.path_index = 0
@@ -1904,6 +1904,7 @@ class Enemy:
             self.search_timer = SEARCH_TIME
 
             self.search_target = None
+            self.searched_last_known_position = False
 
             self.path = []
             self.path_index = 0
@@ -2123,6 +2124,7 @@ class Enemy:
 
             self.search_timer = 0
             self.search_target = None
+            self.searched_last_known_position = False
 
             if (
                 not previously_visible
@@ -2153,6 +2155,7 @@ class Enemy:
                 self.search_timer = SEARCH_TIME
 
                 self.search_target = None
+                self.searched_last_known_position = False
 
                 self.path = []
                 self.path_index = 0
@@ -2219,19 +2222,19 @@ class Enemy:
 
     def generate_search_point(
         self,
+        navigation_grids,
         walls
     ):
 
-        # Prefer attacker position if available.
+        # Prefer the last known player position as the
+        # center of the search area.
         if self.last_attacker_position is not None:
 
             center = pg.Vector2(
                 self.last_attacker_position
             )
 
-            search_radius = (
-                ATTACKER_SEARCH_RADIUS
-            )
+            search_radius = ATTACKER_SEARCH_RADIUS
 
         elif self.last_seen_position is not None:
 
@@ -2245,7 +2248,25 @@ class Enemy:
 
             return None
 
-        for _ in range(50):
+        navigation_grid = navigation_grids.get(
+            self.type
+        )
+
+        if navigation_grid is None:
+            return None
+
+        enemy_grid = world_to_grid(
+            self.rect.center
+        )
+
+        if not (
+            0 <= enemy_grid[0] < len(navigation_grid[0])
+            and
+            0 <= enemy_grid[1] < len(navigation_grid)
+        ):
+            return None
+
+        for _ in range(100):
 
             angle = random.uniform(
                 0,
@@ -2287,6 +2308,35 @@ class Enemy:
                 test_rect.colliderect(wall)
                 for wall in walls
             ):
+                continue
+
+            target_grid = world_to_grid(
+                point
+            )
+
+            if not (
+                0 <= target_grid[0] < len(navigation_grid[0])
+                and
+                0 <= target_grid[1] < len(navigation_grid)
+            ):
+                continue
+
+            if not navigation_grid[
+                target_grid[1]
+            ][
+                target_grid[0]
+            ]:
+                continue
+
+            # Do not select a random search point that
+            # A* cannot actually reach.
+            path = a_star(
+                enemy_grid,
+                target_grid,
+                navigation_grid
+            )
+
+            if not path:
                 continue
 
             return point
@@ -2466,6 +2516,13 @@ class Enemy:
             )
 
         if not self.path:
+
+            # A search target may have landed on a grid cell
+            # that became unusable because of the enemy's exact
+            # position. Let search choose another target.
+            if self.ai_state == AI_SEARCH:
+                self.search_target = None
+
             return
 
         if self.path_index >= len(
@@ -2683,7 +2740,6 @@ class Enemy:
         ):
 
             self.ai_state = AI_IDLE
-
             return
 
         self.search_timer -= dt
@@ -2693,15 +2749,53 @@ class Enemy:
             self.ai_state = AI_IDLE
 
             self.search_target = None
+            self.searched_last_known_position = False
+
             self.path = []
             self.path_index = 0
 
             return
 
-        if self.search_target is None:
+        # ----------------------------------------------------
+        # PHASE 1:
+        # Go directly to the last known player position.
+        # ----------------------------------------------------
+
+        if not self.searched_last_known_position:
+
+            if self.last_attacker_position is not None:
+
+                self.search_target = (
+                    self.last_attacker_position.copy()
+                )
+
+            elif self.last_seen_position is not None:
+
+                self.search_target = (
+                    self.last_seen_position.copy()
+                )
+
+            else:
+
+                self.searched_last_known_position = True
+                self.search_target = None
+
+            self.path = []
+            self.path_index = 0
+            self.path_update_timer = 0
+
+            self.searched_last_known_position = True
+
+        # ----------------------------------------------------
+        # PHASE 2:
+        # Search nearby positions around the last known area.
+        # ----------------------------------------------------
+
+        elif self.search_target is None:
 
             self.search_target = (
                 self.generate_search_point(
+                    navigation_grids,
                     walls
                 )
             )
@@ -2734,6 +2828,7 @@ class Enemy:
             self.search_target = None
             self.path = []
             self.path_index = 0
+            self.path_update_timer = 0
 
     # ========================================================
     # AI UPDATE
@@ -3777,6 +3872,21 @@ def draw_top_bar(screen):
     )
 
     # --------------------------------------------------------
+    # Ammo
+    # --------------------------------------------------------
+
+    ammo_text = info_font.render(
+        f"AMMO: {player_ammo} / {MAX_AMMO}",
+        True,
+        (230, 230, 230)
+    )
+
+    screen.blit(
+        ammo_text,
+        (570, 42)
+    )
+
+    # --------------------------------------------------------
     # Enemies
     # --------------------------------------------------------
 
@@ -3793,7 +3903,7 @@ def draw_top_bar(screen):
 
     screen.blit(
         enemy_text,
-        (570, 42)
+        (760, 42)
     )
 
     # --------------------------------------------------------
@@ -4429,6 +4539,11 @@ def draw_game_over(screen):
 
 def shoot():
 
+    global player_ammo
+
+    if player_ammo <= 0:
+        return False
+
     mouse_position = pg.Vector2(
         pg.mouse.get_pos()
     )
@@ -4441,7 +4556,7 @@ def shoot():
     )
 
     if direction.length_squared() == 0:
-        return
+        return False
 
     direction.normalize_ip()
 
@@ -4488,6 +4603,12 @@ def shoot():
             )
         )
 
+    # One ammo is consumed per trigger/shot,
+    # even for multi-projectile weapons such as the shotgun.
+    player_ammo -= 1
+
+    return True
+
 
 # ============================================================
 
@@ -4496,6 +4617,7 @@ def shoot():
 def reset_game():
 
     global player_health
+    global player_ammo
     global player_damage_timer
     global weapon_fire_timer
     global wave_number
@@ -4513,6 +4635,8 @@ def reset_game():
     player_health = player_stats[
         "max_health"
     ]
+
+    player_ammo = MAX_AMMO
 
     player_damage_timer = 0
     weapon_fire_timer = 0
@@ -5443,8 +5567,10 @@ while running:
                         player_coins += 10
 
                     elif item.type == "ammo":
-                        # Reserved for the future ammo system.
-                        pass
+                        player_ammo = min(
+                            player_ammo + AMMO_PICKUP_AMOUNT,
+                            MAX_AMMO
+                        )
 
                     items.remove(item)
 
