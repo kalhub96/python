@@ -369,6 +369,17 @@ ENEMY_WEAPONS = {
 
 
 # ============================================================
+# WITCH ABILITY
+# ============================================================
+
+WITCH_TELEPORT_COOLDOWN = 8.0
+WITCH_TELEPORT_TRIGGER_RANGE = 220
+WITCH_TELEPORT_MIN_DISTANCE = 170
+WITCH_TELEPORT_MAX_DISTANCE = 300
+WITCH_TELEPORT_ATTEMPTS = 20
+WITCH_ABILITY_FLASH_TIME = 0.35
+
+
 # ENEMY SPAWN PROBABILITY
 # ============================================================
 
@@ -989,10 +1000,10 @@ def get_neighbors(
     return neighbors
         
 def heuristic(a, b):
-
-    return max(
-        abs(a[0] - b[0]),
-        abs(a[1] - b[1])
+    # Manhattan distance is admissible for 4-directional movement.
+    return (
+        abs(a[0] - b[0])
+        + abs(a[1] - b[1])
     )
 
 
@@ -1077,19 +1088,8 @@ def a_star(
             grid
         ):
 
-            dx = abs(
-                neighbor[0] - current[0]
-            )
-
-            dy = abs(
-                neighbor[1] - current[1]
-            )
-
-            movement_cost = (
-                math.sqrt(2)
-                if dx == 1 and dy == 1
-                else 1
-            )
+            # get_neighbors() is 4-directional, so every move costs 1.
+            movement_cost = 1
 
             tentative_g_score = (
                 g_score[current]
@@ -1621,8 +1621,14 @@ class Enemy:
         self.path_index = 0
 
         self.path_update_timer = 0.0
-        self.stuck_timer = 0.0
         self.path_update_interval = 0.25
+        
+        # Detect when the enemy is physically blocked
+        self.stuck_timer = 0.0
+
+        # Witch ability state
+        self.ability_cooldown = 0.0
+        self.ability_flash_timer = 0.0
 
         if player_position is not None:
 
@@ -2352,114 +2358,101 @@ class Enemy:
         target_position,
         navigation_grid
     ):
+        """Calculate a size-aware A* path to target_position."""
+        self.path = []
+        self.path_index = 0
 
-        start = world_to_grid(
-            self.rect.center
-        )
-
-        goal = world_to_grid(
-            target_position
-        )
-
-        if not navigation_grid:
-
-            self.path = []
-            self.path_index = 0
-
+        if not navigation_grid or not navigation_grid[0]:
             return
 
-        grid_height = len(
-            navigation_grid
-        )
+        grid_height = len(navigation_grid)
+        grid_width = len(navigation_grid[0])
 
-        grid_width = len(
-            navigation_grid[0]
-        )
+        start = world_to_grid(self.rect.center)
+        goal = world_to_grid(target_position)
 
-        if not (
-            0 <= start[0] < grid_width
-            and
-            0 <= start[1] < grid_height
-        ):
+        def in_bounds(cell):
+            return (
+                0 <= cell[0] < grid_width
+                and
+                0 <= cell[1] < grid_height
+            )
 
-            self.path = []
-            self.path_index = 0
-
+        if not in_bounds(start):
             return
 
-        if not (
-            0 <= goal[0] < grid_width
-            and
-            0 <= goal[1] < grid_height
-        ):
-
-            self.path = []
-            self.path_index = 0
-
+        if not in_bounds(goal):
             return
 
-        if not navigation_grid[
-            start[1]
-        ][
-            start[0]
-        ]:
-
-            self.path = []
-            self.path_index = 0
-
-            return
-
-        if not navigation_grid[
-            goal[1]
-        ][
-            goal[0]
-        ]:
-
-            possible_goals = []
+        # The enemy can occasionally be between grid cells while its
+        # current cell is blocked by the size-aware grid. Find the
+        # nearest walkable cell instead of abandoning the path.
+        if not navigation_grid[start[1]][start[0]]:
+            found_start = None
 
             for radius in range(1, 4):
-
-                for dx in range(
-                    -radius,
-                    radius + 1
-                ):
-
-                    for dy in range(
-                        -radius,
-                        radius + 1
-                    ):
-
-                        gx = goal[0] + dx
-                        gy = goal[1] + dy
-
-                        if not (
-                            0 <= gx < grid_width
-                            and
-                            0 <= gy < grid_height
-                        ):
+                candidates = []
+                for dx in range(-radius, radius + 1):
+                    for dy in range(-radius, radius + 1):
+                        if max(abs(dx), abs(dy)) != radius:
                             continue
 
-                        if navigation_grid[gy][gx]:
+                        candidate = (
+                            start[0] + dx,
+                            start[1] + dy
+                        )
 
-                            possible_goals.append(
-                                (gx, gy)
-                            )
+                        if not in_bounds(candidate):
+                            continue
 
-                if possible_goals:
+                        if navigation_grid[candidate[1]][candidate[0]]:
+                            candidates.append(candidate)
+
+                if candidates:
+                    found_start = min(
+                        candidates,
+                        key=lambda cell: abs(cell[0] - start[0]) + abs(cell[1] - start[1])
+                    )
                     break
 
-            if possible_goals:
-
-                goal = random.choice(
-                    possible_goals
-                )
-
-            else:
-
-                self.path = []
-                self.path_index = 0
-
+            if found_start is None:
                 return
+
+            start = found_start
+
+        # If the target cell is blocked, use the nearest walkable cell.
+        if not navigation_grid[goal[1]][goal[0]]:
+            found_goal = None
+
+            for radius in range(1, 4):
+                candidates = []
+                for dx in range(-radius, radius + 1):
+                    for dy in range(-radius, radius + 1):
+                        if max(abs(dx), abs(dy)) != radius:
+                            continue
+
+                        candidate = (
+                            goal[0] + dx,
+                            goal[1] + dy
+                        )
+
+                        if not in_bounds(candidate):
+                            continue
+
+                        if navigation_grid[candidate[1]][candidate[0]]:
+                            candidates.append(candidate)
+
+                if candidates:
+                    found_goal = min(
+                        candidates,
+                        key=lambda cell: abs(cell[0] - goal[0]) + abs(cell[1] - goal[1])
+                    )
+                    break
+
+            if found_goal is None:
+                return
+
+            goal = found_goal
 
         self.path = a_star(
             start,
@@ -2484,103 +2477,92 @@ class Enemy:
         walls,
         dt
     ):
-
+        """Move toward target using the enemy-size-aware A* path."""
         self.path_update_timer -= dt
 
-        navigation_grid = (
-            navigation_grids.get(
-                self.type
-            )
-        )
-
+        navigation_grid = navigation_grids.get(self.type)
         if navigation_grid is None:
             return
 
         if (
             self.path_update_timer <= 0
-            or
-            not self.path
-            or
-            self.path_index >= len(
-                self.path
-            )
+            or not self.path
+            or self.path_index >= len(self.path)
         ):
-
             self.calculate_path(
                 target_position,
                 navigation_grid
             )
+            self.path_update_timer = self.path_update_interval
 
-            self.path_update_timer = (
-                self.path_update_interval
-            )
-
-        if not self.path:
-
-            # A search target may have landed on a grid cell
-            # that became unusable because of the enemy's exact
-            # position. Let search choose another target.
-            if self.ai_state == AI_SEARCH:
-                self.search_target = None
-
+        if not self.path or self.path_index >= len(self.path):
             return
 
-        if self.path_index >= len(
-            self.path
-        ):
-            return
-
-        enemy_pos = pg.Vector2(
-            self.rect.center
-        )
-
-        target = grid_to_world(
-            self.path[
-                self.path_index
-            ]
-        )
-
+        enemy_pos = pg.Vector2(self.rect.center)
+        target = grid_to_world(self.path[self.path_index])
         direction = target - enemy_pos
+        distance = direction.length()
 
-        if direction.length_squared() == 0:
-
+        # Consume any waypoint that is already under the enemy.
+        while distance <= 6 and self.path_index < len(self.path) - 1:
             self.path_index += 1
+            target = grid_to_world(self.path[self.path_index])
+            direction = target - pg.Vector2(self.rect.center)
+            distance = direction.length()
 
+        if distance <= 0.001:
+            self.path_index += 1
             return
 
         direction.normalize_ip()
+        self.facing_direction = direction.copy()
 
-        self.facing_direction = (
-            direction.copy()
+        # Never move farther than the current waypoint.
+        move_distance = min(
+            self.speed * dt,
+            distance
         )
 
-        movement = (
-            direction
-            * self.speed
-            * dt
-        )
+        old_position = pg.Vector2(self.rect.center)
 
         move_horizontal(
             self.rect,
-            movement.x,
+            direction.x * move_distance,
             walls
         )
-
         move_vertical(
             self.rect,
-            movement.y,
+            direction.y * move_distance,
             walls
         )
 
-        enemy_pos = pg.Vector2(
-            self.rect.center
+        keep_inside_play_area(
+            self.rect,
+            PLAY_AREA
         )
 
-        if (
-            enemy_pos.distance_to(target)
-            < SEARCH_POINT_REACHED_DISTANCE
-        ):
+        new_position = pg.Vector2(self.rect.center)
+        actual_movement = new_position.distance_to(old_position)
 
+        if actual_movement < 0.5 and move_distance > 0.5:
+            self.stuck_timer += dt
+        else:
+            self.stuck_timer = 0.0
+
+        # A path can become invalid after collision resolution. Throw it
+        # away and force A* to build a fresh route.
+        if self.stuck_timer >= 0.2:
+            self.path = []
+            self.path_index = 0
+            self.path_update_timer = 0.0
+            self.stuck_timer = 0.0
+            return
+
+        # Reaching a waypoint advances to the next one.
+        if (
+            pg.Vector2(self.rect.center).distance_to(target)
+            <= SEARCH_POINT_REACHED_DISTANCE
+        ):
             self.path_index += 1
 
     # ========================================================
@@ -2831,7 +2813,53 @@ class Enemy:
             self.path_update_timer = 0
 
     # ========================================================
+    # WITCH ABILITY
+    # ========================================================
+
+    def update_ability_timer(self, dt):
+        self.ability_cooldown = max(0, self.ability_cooldown - dt)
+        self.ability_flash_timer = max(0, self.ability_flash_timer - dt)
+
+    def try_witch_teleport(self, player_pos, walls):
+        if self.type != "witch" or self.ability_cooldown > 0:
+            return False
+
+        player_position = pg.Vector2(player_pos)
+        if pg.Vector2(self.rect.center).distance_to(player_position) > WITCH_TELEPORT_TRIGGER_RANGE:
+            return False
+
+        for _ in range(WITCH_TELEPORT_ATTEMPTS):
+            angle = random.uniform(0, math.tau)
+            distance = random.uniform(WITCH_TELEPORT_MIN_DISTANCE, WITCH_TELEPORT_MAX_DISTANCE)
+            target = player_position + pg.Vector2(math.cos(angle), math.sin(angle)) * distance
+
+            target_rect = self.rect.copy()
+            target_rect.center = (round(target.x), round(target.y))
+
+            if not PLAY_AREA.contains(target_rect):
+                continue
+            if any(target_rect.colliderect(wall) for wall in walls):
+                continue
+            if target_rect.colliderect(player):
+                continue
+
+            self.rect.center = target_rect.center
+            self.path = []
+            self.path_index = 0
+            self.path_update_timer = 0.0
+            self.stuck_timer = 0.0
+            self.ability_cooldown = WITCH_TELEPORT_COOLDOWN
+            self.ability_flash_timer = WITCH_ABILITY_FLASH_TIME
+
+            direction = player_position - pg.Vector2(self.rect.center)
+            if direction.length_squared() > 0:
+                self.facing_direction = direction.normalize()
+            return True
+
+        return False
+
     # AI UPDATE
+    # ========================================================
     # ========================================================
 
     def update_ai(
@@ -2843,6 +2871,7 @@ class Enemy:
     ):
 
         self.update_weapon_timer(dt)
+        self.update_ability_timer(dt)
 
         self.update_attacker_memory(dt)
 
@@ -2867,6 +2896,9 @@ class Enemy:
             # ------------------------------------------------
 
             if weapon["type"] == "ranged":
+
+                if self.try_witch_teleport(player_pos, walls):
+                    return
 
                 if (
                     self.can_see_player
@@ -2969,6 +3001,11 @@ class Enemy:
 
         center = self.rect.center
         size = self.rect.width
+
+        if self.ability_flash_timer > 0:
+            progress = self.ability_flash_timer / WITCH_ABILITY_FLASH_TIME
+            radius = int(size * (1.5 + (1.0 - progress)))
+            pg.draw.circle(screen, (190, 90, 255), center, radius, 3)
         half = size / 2
 
         # ----------------------------------------------------
@@ -3528,72 +3565,58 @@ def generate_valid_world(
     wall_amount=10,
     max_attempts=100
 ):
-    
+    """Generate walls only when every enemy size has a connected grid."""
     for attempt in range(max_attempts):
-        
-        candidate_walls = generate_walls(
-            wall_amount
-        )
-        
+        candidate_walls = generate_walls(wall_amount)
         candidate_grids = {}
-        
+        player_grid = world_to_grid(player.center)
         valid = True
-        
-        # Build a navigation grid for every enemy type
+
         for enemy_type, data in ENEMY_TYPES.items():
-            
             grid = create_navigation_grid(
                 candidate_walls,
                 data["size"]
             )
-            
-            candidate_grids[
-                enemy_type
-            ] = grid
-            
-            player_grid = world_to_grid(
-                player.center
-            )
-            
-            if not is_grid_connected(
-                grid,
-                player_grid
-            ):
-                
+            candidate_grids[enemy_type] = grid
+
+            if not is_grid_connected(grid, player_grid):
                 valid = False
                 break
-            
-            if valid:
-                
-                return(
-                    candidate_walls,
-                    candidate_grids
-                )
-    # Fallback
+
+        if valid:
+            return candidate_walls, candidate_grids
+
     print(
         "WARNING: Could not generate a fully connected map."
     )
-    
-    fallback_wall = generate_walls(
-        wall_amount
-    )
-    
-    fallback_grids = {}
-    
-    for enemy_type, data in ENEMY_TYPES.items():
-        
-        fallback_grids[
-            enemy_type
-        ] = create_navigation_grid(
-            fallback_wall,
-            data["size"]
-        )
-    
-    return (
-        fallback_wall,
-        fallback_grids
-    )
-    
+
+    # Safe fallback: progressively reduce wall count until all enemy
+    # navigation grids are connected.
+    for reduced_amount in range(wall_amount, -1, -1):
+        fallback_walls = generate_walls(reduced_amount)
+        fallback_grids = {
+            enemy_type: create_navigation_grid(
+                fallback_walls,
+                data["size"]
+            )
+            for enemy_type, data in ENEMY_TYPES.items()
+        }
+
+        if all(
+            is_grid_connected(
+                fallback_grids[enemy_type],
+                player_grid
+            )
+            for enemy_type in ENEMY_TYPES
+        ):
+            return fallback_walls, fallback_grids
+
+    return [], {
+        enemy_type: create_navigation_grid([], data["size"])
+        for enemy_type, data in ENEMY_TYPES.items()
+    }
+
+
 walls, navigation_grids = generate_valid_world(
     10
 )
@@ -5305,626 +5328,630 @@ def draw_weapon_shop(screen):
 # MAIN LOOP
 # ============================================================
 
-running = True
+def run_game():
+
+    global running
+
+    running = True
 
 
-while running:
+    while running:
 
-    dt = clock.tick(60) / 1000.0
+        dt = clock.tick(60) / 1000.0
 
-    dt = min(
-        dt,
-        0.05
-    )
-
-    # ========================================================
-    # PLAYER TIMERS
-    # ========================================================
-
-    if player_damage_timer > 0:
-
-        player_damage_timer -= dt
-
-        player_damage_timer = max(
-            0,
-            player_damage_timer
+        dt = min(
+            dt,
+            0.05
         )
 
-    if weapon_fire_timer > 0:
+        # ========================================================
+        # PLAYER TIMERS
+        # ========================================================
 
-        weapon_fire_timer -= dt
+        if player_damage_timer > 0:
 
-        weapon_fire_timer = max(
-            0,
-            weapon_fire_timer
-        )
+            player_damage_timer -= dt
 
-    # ========================================================
-    # EVENTS
-    # ========================================================
+            player_damage_timer = max(
+                0,
+                player_damage_timer
+            )
 
-    for event in pg.event.get():
+        if weapon_fire_timer > 0:
 
-        if event.type == pg.QUIT:
+            weapon_fire_timer -= dt
 
-            running = False
+            weapon_fire_timer = max(
+                0,
+                weapon_fire_timer
+            )
 
-        # ----------------------------------------------------
-        # Mouse
-        # ----------------------------------------------------
+        # ========================================================
+        # EVENTS
+        # ========================================================
 
-        elif event.type == pg.MOUSEBUTTONDOWN:
+        for event in pg.event.get():
 
-            if event.button == 1:
-                
-                # ====================================================
-                # HOME
-                # ====================================================
-                
-                if game_state == GAME_STATE_HOME:
+            if event.type == pg.QUIT:
+
+                running = False
+
+            # ----------------------------------------------------
+            # Mouse
+            # ----------------------------------------------------
+
+            elif event.type == pg.MOUSEBUTTONDOWN:
+
+                if event.button == 1:
                     
-                    if HOME_PLAY_RECT.collidepoint(
-                        event.pos
-                    ):
-                        
-                        reset_game()
-                        
-                        game_state = GAME_STATE_PREP
+                    # ====================================================
+                    # HOME
+                    # ====================================================
                     
-                    elif HOME_WEAPONS_RECT.collidepoint(
-                        event.pos
-                    ):
-                        game_state = GAME_STATE_SHOP
+                    if game_state == GAME_STATE_HOME:
                         
-                # ====================================================
-                # SHOP
-                # ====================================================
-                
-                elif game_state == GAME_STATE_SHOP:
-                    
-                    back_rect = pg.Rect(
-                        30,
-                        30,
-                        120,
-                        45
-                    )
-                    
-                    if back_rect.collidepoint(
-                        event.pos
-                    ):
-                        
-                        game_state = GAME_STATE_HOME
-                    
-                    else: 
-                        
-                        for index, rect in enumerate(
-                            SHOP_WEAPON_RECTS
+                        if HOME_PLAY_RECT.collidepoint(
+                            event.pos
                         ):
                             
+                            reset_game()
+                            
+                            game_state = GAME_STATE_PREP
+                        
+                        elif HOME_WEAPONS_RECT.collidepoint(
+                            event.pos
+                        ):
+                            game_state = GAME_STATE_SHOP
+                            
+                    # ====================================================
+                    # SHOP
+                    # ====================================================
+                    
+                    elif game_state == GAME_STATE_SHOP:
+                        
+                        back_rect = pg.Rect(
+                            30,
+                            30,
+                            120,
+                            45
+                        )
+                        
+                        if back_rect.collidepoint(
+                            event.pos
+                        ):
+                            
+                            game_state = GAME_STATE_HOME
+                        
+                        else: 
+                            
+                            for index, rect in enumerate(
+                                SHOP_WEAPON_RECTS
+                            ):
+                                
+                                if rect.collidepoint(
+                                    event.pos
+                                ):
+                                    
+                                    weapon_ids = list(
+                                        PLAYER_WEAPONS.keys()
+                                    )
+                                    
+                                    weapon_id = (
+                                        weapon_ids[index]
+                                    )
+                                    
+                                    if weapon_id in owned_weapons:
+                                        
+                                        equip_weapon(
+                                            weapon_id
+                                        )
+                                        
+                                    else:
+                                        buy_weapon(
+                                            weapon_id
+                                        )
+                                        
+                                        break
+                    
+                    # ====================================================
+                    # UPGRADE
+                    # ====================================================
+
+                    elif game_state == GAME_STATE_UPGRADE:
+
+                        for index, rect in enumerate(
+                            upgrade_selection_rects
+                        ):
+
                             if rect.collidepoint(
                                 event.pos
                             ):
-                                
-                                weapon_ids = list(
-                                    PLAYER_WEAPONS.keys()
+
+                                choose_upgrade(
+                                    index
                                 )
-                                
-                                weapon_id = (
-                                    weapon_ids[index]
-                                )
-                                
-                                if weapon_id in owned_weapons:
-                                    
-                                    equip_weapon(
-                                        weapon_id
-                                    )
-                                    
-                                else:
-                                    buy_weapon(
-                                        weapon_id
-                                    )
-                                    
-                                    break
-                
-                # ====================================================
-                # UPGRADE
-                # ====================================================
 
-                elif game_state == GAME_STATE_UPGRADE:
+                                break
+                        
+            # ----------------------------------------------------
+            # Keyboard
+            # ----------------------------------------------------
 
-                    for index, rect in enumerate(
-                        upgrade_selection_rects
-                    ):
+            elif event.type == pg.KEYDOWN:
 
-                        if rect.collidepoint(
-                            event.pos
-                        ):
+                # Start wave.
+                if (
+                    event.key == pg.K_SPACE
+                    and
+                    game_state == GAME_STATE_PREP
+                ):
 
-                            choose_upgrade(
-                                index
-                            )
+                    start_wave()
 
-                            break
+                # Upgrade selection.
+                elif (
+                    game_state == GAME_STATE_UPGRADE
+                    and
+                    event.key in (
+                        pg.K_1,
+                        pg.K_2,
+                        pg.K_3
+                    )
+                ):
+
+                    choose_upgrade(
+                        event.key - pg.K_1
+                    )
+
+                # Restart.
+                elif (
+                    event.key == pg.K_r
+                    and
+                    game_state == GAME_STATE_GAME_OVER
+                ):
+
+                    reset_game()
                     
-        # ----------------------------------------------------
-        # Keyboard
-        # ----------------------------------------------------
+                    game_state = GAME_STATE_HOME
 
-        elif event.type == pg.KEYDOWN:
+        # ========================================================
+        # GAME UPDATE
+        # ========================================================
 
-            # Start wave.
-            if (
-                event.key == pg.K_SPACE
-                and
-                game_state == GAME_STATE_PREP
+        if game_state != GAME_STATE_GAME_OVER:
+
+            # ====================================================
+            # PLAYER MOVEMENT
+            # ====================================================
+
+            if game_state in (
+                GAME_STATE_PREP,
+                GAME_STATE_ACTIVE
             ):
 
-                start_wave()
+                keys = pg.key.get_pressed()
 
-            # Upgrade selection.
-            elif (
-                game_state == GAME_STATE_UPGRADE
-                and
-                event.key in (
-                    pg.K_1,
-                    pg.K_2,
-                    pg.K_3
-                )
-            ):
-
-                choose_upgrade(
-                    event.key - pg.K_1
+                direction = pg.Vector2(
+                    keys[pg.K_d] - keys[pg.K_a],
+                    keys[pg.K_s] - keys[pg.K_w]
                 )
 
-            # Restart.
-            elif (
-                event.key == pg.K_r
-                and
-                game_state == GAME_STATE_GAME_OVER
-            ):
+                if direction.length_squared() > 0:
 
-                reset_game()
-                
-                game_state = GAME_STATE_HOME
+                    direction.normalize_ip()
 
-    # ========================================================
-    # GAME UPDATE
-    # ========================================================
-
-    if game_state != GAME_STATE_GAME_OVER:
-
-        # ====================================================
-        # PLAYER MOVEMENT
-        # ====================================================
-
-        if game_state in (
-            GAME_STATE_PREP,
-            GAME_STATE_ACTIVE
-        ):
-
-            keys = pg.key.get_pressed()
-
-            direction = pg.Vector2(
-                keys[pg.K_d] - keys[pg.K_a],
-                keys[pg.K_s] - keys[pg.K_w]
-            )
-
-            if direction.length_squared() > 0:
-
-                direction.normalize_ip()
-
-                movement = (
-                    direction
-                    * player_stats["move_speed"]
-                    * dt
-                )
-
-            else:
-
-                movement = pg.Vector2(
-                    0,
-                    0
-                )
-
-            move_horizontal(
-                player,
-                movement.x,
-                walls
-            )
-
-            move_vertical(
-                player,
-                movement.y,
-                walls
-            )
-
-            keep_inside_play_area(
-                player,
-                PLAY_AREA
-            )
-
-            player_pos.update(
-                player.center
-            )
-
-        # ====================================================
-        # ITEM PICKUP
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            for item in items[:]:
-
-                if player_pos.distance_to(item.pos) <= 30:
-
-                    if item.type == "health":
-                        player_health = min(
-                            player_health + 25,
-                            player_stats["max_health"]
-                        )
-
-                    elif item.type == "coin":
-                        player_coins += 10
-
-                    elif item.type == "ammo":
-                        player_ammo = min(
-                            player_ammo + AMMO_PICKUP_AMOUNT,
-                            MAX_AMMO
-                        )
-
-                    items.remove(item)
-
-        # ====================================================
-        # PLAYER SHOOTING
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            mouse_buttons = pg.mouse.get_pressed()
-
-            if (
-                mouse_buttons[0]
-                and weapon_fire_timer <= 0
-            ):
-
-                shoot()
-
-                weapon = get_current_weapon()
-                
-                weapon_fire_timer = (
-                    weapon["fire_rate"]
-                    / player_stats[
-                        "fire_rate_multiplier"
-                    ]
-                )
-
-        # ====================================================
-        # WAVE SYSTEM
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            if spawn_queue:
-
-                spawn_timer -= dt
-
-                if spawn_timer <= 0:
-
-                    enemy_type = (
-                        spawn_queue[0]
+                    movement = (
+                        direction
+                        * player_stats["move_speed"]
+                        * dt
                     )
 
-                    before_count = (
-                        len(spawn_queue)
+                else:
+
+                    movement = pg.Vector2(
+                        0,
+                        0
                     )
 
-                    spawn_next_wave_enemy()
-
-                    after_count = (
-                        len(spawn_queue)
-                    )
-
-                    if after_count < before_count:
-
-                        spawn_timer = (
-                            SPAWN_DELAY[
-                                enemy_type
-                            ]
-                        )
-
-                    else:
-
-                        spawn_timer = 0.1
-
-            elif not enemies:
-
-                game_state = (
-                    GAME_STATE_COMPLETE
-                )
-
-                wave_complete_timer = (
-                    WAVE_COMPLETE_TIME
-                )
-
-                wave_complete_number = (
-                    wave_number
-                )
-
-                player_coins += WAVE_REWARDS.get(
-                    wave_number,
-                    0
-                )
-
-                enemy_projectiles.clear()
-                bullets.clear()
-
-        # ====================================================
-        # WAVE COMPLETE
-        # ====================================================
-
-        elif game_state == GAME_STATE_COMPLETE:
-
-            wave_complete_timer -= dt
-
-            if wave_complete_timer <= 0:
-                
-                generate_upgrade_choices()
-
-                enemy_projectiles.clear()
-                bullets.clear()
-
-                game_state = (
-                    GAME_STATE_UPGRADE
-                )
-
-        # ====================================================
-        # ENEMY TIMERS
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            for enemy in enemies:
-
-                enemy.update_communication_timer(
-                    dt
-                )
-
-        # ====================================================
-        # ENEMY AI
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            for enemy in enemies:
-
-                enemy.update_vision(
-                    player_pos,
-                    walls,
-                    enemies
-                )
-
-                enemy.update_ai(
-                    player_pos,
-                    navigation_grids,
-                    walls,
-                    dt
-                )
-
-                keep_inside_play_area(
-                    enemy.rect,
-                    PLAY_AREA
-                )
-
-        # ====================================================
-        # PLAYER BULLET UPDATE
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            for bullet in bullets:
-
-                bullet.update(
-                    dt,
+                move_horizontal(
+                    player,
+                    movement.x,
                     walls
                 )
 
-        # ====================================================
-        # ENEMY PROJECTILE UPDATE
-        # ====================================================
-
-        if game_state == GAME_STATE_ACTIVE:
-
-            for projectile in enemy_projectiles:
-
-                projectile.update(
-                    dt,
-                    walls,
-                    player
+                move_vertical(
+                    player,
+                    movement.y,
+                    walls
                 )
 
-        # ====================================================
-        # PLAYER BULLET -> ENEMY
-        # ====================================================
+                keep_inside_play_area(
+                    player,
+                    PLAY_AREA
+                )
 
-        if game_state == GAME_STATE_ACTIVE:
+                player_pos.update(
+                    player.center
+                )
 
-            for bullet in bullets:
+            # ====================================================
+            # ITEM PICKUP
+            # ====================================================
 
-                if not bullet.alive:
-                    continue
+            if game_state == GAME_STATE_ACTIVE:
+
+                for item in items[:]:
+
+                    if player_pos.distance_to(item.pos) <= 30:
+
+                        if item.type == "health":
+                            player_health = min(
+                                player_health + 25,
+                                player_stats["max_health"]
+                            )
+
+                        elif item.type == "coin":
+                            player_coins += 10
+
+                        elif item.type == "ammo":
+                            player_ammo = min(
+                                player_ammo + AMMO_PICKUP_AMOUNT,
+                                MAX_AMMO
+                            )
+
+                        items.remove(item)
+
+            # ====================================================
+            # PLAYER SHOOTING
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
+
+                mouse_buttons = pg.mouse.get_pressed()
+
+                if (
+                    mouse_buttons[0]
+                    and weapon_fire_timer <= 0
+                ):
+
+                    shoot()
+
+                    weapon = get_current_weapon()
+                    
+                    weapon_fire_timer = (
+                        weapon["fire_rate"]
+                        / player_stats[
+                            "fire_rate_multiplier"
+                        ]
+                    )
+
+            # ====================================================
+            # WAVE SYSTEM
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
+
+                if spawn_queue:
+
+                    spawn_timer -= dt
+
+                    if spawn_timer <= 0:
+
+                        enemy_type = (
+                            spawn_queue[0]
+                        )
+
+                        before_count = (
+                            len(spawn_queue)
+                        )
+
+                        spawn_next_wave_enemy()
+
+                        after_count = (
+                            len(spawn_queue)
+                        )
+
+                        if after_count < before_count:
+
+                            spawn_timer = (
+                                SPAWN_DELAY[
+                                    enemy_type
+                                ]
+                            )
+
+                        else:
+
+                            spawn_timer = 0.1
+
+                elif not enemies:
+
+                    game_state = (
+                        GAME_STATE_COMPLETE
+                    )
+
+                    wave_complete_timer = (
+                        WAVE_COMPLETE_TIME
+                    )
+
+                    wave_complete_number = (
+                        wave_number
+                    )
+
+                    player_coins += WAVE_REWARDS.get(
+                        wave_number,
+                        0
+                    )
+
+                    enemy_projectiles.clear()
+                    bullets.clear()
+
+            # ====================================================
+            # WAVE COMPLETE
+            # ====================================================
+
+            elif game_state == GAME_STATE_COMPLETE:
+
+                wave_complete_timer -= dt
+
+                if wave_complete_timer <= 0:
+                    
+                    generate_upgrade_choices()
+
+                    enemy_projectiles.clear()
+                    bullets.clear()
+
+                    game_state = (
+                        GAME_STATE_UPGRADE
+                    )
+
+            # ====================================================
+            # ENEMY TIMERS
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
 
                 for enemy in enemies:
 
-                    if enemy.health <= 0:
+                    enemy.update_communication_timer(
+                        dt
+                    )
+
+            # ====================================================
+            # ENEMY AI
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
+
+                for enemy in enemies:
+
+                    enemy.update_vision(
+                        player_pos,
+                        walls,
+                        enemies
+                    )
+
+                    enemy.update_ai(
+                        player_pos,
+                        navigation_grids,
+                        walls,
+                        dt
+                    )
+
+                    keep_inside_play_area(
+                        enemy.rect,
+                        PLAY_AREA
+                    )
+
+            # ====================================================
+            # PLAYER BULLET UPDATE
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
+
+                for bullet in bullets:
+
+                    bullet.update(
+                        dt,
+                        walls
+                    )
+
+            # ====================================================
+            # ENEMY PROJECTILE UPDATE
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
+
+                for projectile in enemy_projectiles:
+
+                    projectile.update(
+                        dt,
+                        walls,
+                        player
+                    )
+
+            # ====================================================
+            # PLAYER BULLET -> ENEMY
+            # ====================================================
+
+            if game_state == GAME_STATE_ACTIVE:
+
+                for bullet in bullets:
+
+                    if not bullet.alive:
                         continue
 
-                    enemy_distance = (
-                        bullet.position.distance_to(
-                            pg.Vector2(
-                                enemy.rect.center
+                    for enemy in enemies:
+
+                        if enemy.health <= 0:
+                            continue
+
+                        enemy_distance = (
+                            bullet.position.distance_to(
+                                pg.Vector2(
+                                    enemy.rect.center
+                                )
                             )
                         )
-                    )
 
-                    collision_distance = (
-                        bullet.radius
-                        + enemy.rect.width / 2
-                    )
-
-                    if (
-                        enemy_distance
-                        <= collision_distance
-                    ):
-
-                        # ------------------------------------
-                        # NEW AI PERCEPTION SYSTEM
-                        # ------------------------------------
-
-                        enemy.register_attack(
-                            bullet,
-                            enemies
+                        collision_distance = (
+                            bullet.radius
+                            + enemy.rect.width / 2
                         )
 
-                        # ------------------------------------
-                        # Damage
-                        # ------------------------------------
+                        if (
+                            enemy_distance
+                            <= collision_distance
+                        ):
 
-                        enemy.health -= (
-                            bullet.damage
-                        )
+                            # ------------------------------------
+                            # NEW AI PERCEPTION SYSTEM
+                            # ------------------------------------
 
-                        bullet.alive = False
+                            enemy.register_attack(
+                                bullet,
+                                enemies
+                            )
 
-                        break
+                            # ------------------------------------
+                            # Damage
+                            # ------------------------------------
 
-        # ====================================================
-        # REMOVE DEAD ENEMIES
-        # ====================================================
+                            enemy.health -= (
+                                bullet.damage
+                            )
 
-        alive_enemies = []
+                            bullet.alive = False
 
-        for enemy in enemies:
-            if enemy.health > 0:
-                alive_enemies.append(enemy)
-            else:
-                drop_item(enemy)
+                            break
 
-        enemies[:] = alive_enemies
+            # ====================================================
+            # REMOVE DEAD ENEMIES
+            # ====================================================
 
-        # ====================================================
-        # REMOVE DEAD PLAYER BULLETS
-        # ====================================================
+            alive_enemies = []
 
-        bullets[:] = [
-            bullet
-            for bullet in bullets
-            if bullet.alive
-        ]
+            for enemy in enemies:
+                if enemy.health > 0:
+                    alive_enemies.append(enemy)
+                else:
+                    drop_item(enemy)
 
-        # ====================================================
-        # REMOVE DEAD ENEMY PROJECTILES
-        # ====================================================
+            enemies[:] = alive_enemies
 
-        enemy_projectiles[:] = [
-            projectile
-            for projectile in enemy_projectiles
-            if projectile.alive
-        ]
+            # ====================================================
+            # REMOVE DEAD PLAYER BULLETS
+            # ====================================================
 
-    # ========================================================
-    # RENDER
-    # ========================================================
+            bullets[:] = [
+                bullet
+                for bullet in bullets
+                if bullet.alive
+            ]
 
-    if game_state == GAME_STATE_HOME:
+            # ====================================================
+            # REMOVE DEAD ENEMY PROJECTILES
+            # ====================================================
 
-        draw_home_screen(screen)
+            enemy_projectiles[:] = [
+                projectile
+                for projectile in enemy_projectiles
+                if projectile.alive
+            ]
 
-    elif game_state == GAME_STATE_SHOP:
+        # ========================================================
+        # RENDER
+        # ========================================================
 
-        draw_weapon_shop(screen)
+        if game_state == GAME_STATE_HOME:
 
-    else:
+            draw_home_screen(screen)
 
-        draw_map(screen)
-        draw_top_bar(screen)
-        draw_player_vision(screen)
+        elif game_state == GAME_STATE_SHOP:
 
-        if (
-            player_damage_timer > 0
-            and
-            int(player_damage_timer * 12) % 2 == 0
-        ):
-            player_color = (255, 255, 255)
+            draw_weapon_shop(screen)
+
         else:
-            player_color = (80, 220, 120)
 
-        pg.draw.rect(
-            screen,
-            player_color,
-            player
-        )
+            draw_map(screen)
+            draw_top_bar(screen)
+            draw_player_vision(screen)
 
-        mouse_position = pg.Vector2(
-            pg.mouse.get_pos()
-        )
+            if (
+                player_damage_timer > 0
+                and
+                int(player_damage_timer * 12) % 2 == 0
+            ):
+                player_color = (255, 255, 255)
+            else:
+                player_color = (80, 220, 120)
 
-        player_center = pg.Vector2(
-            player.center
-        )
-
-        aim_direction = (
-            mouse_position
-            - player_center
-        )
-
-        if aim_direction.length_squared() > 0:
-
-            aim_direction.normalize_ip()
-
-            aim_end = (
-                player_center
-                + aim_direction * 35
-            )
-
-            pg.draw.line(
+            pg.draw.rect(
                 screen,
-                (255, 255, 255),
-                player_center,
-                (
-                    round(aim_end.x),
-                    round(aim_end.y)
-                ),
-                3
+                player_color,
+                player
             )
 
-        for bullet in bullets:
-            bullet.draw(screen)
+            mouse_position = pg.Vector2(
+                pg.mouse.get_pos()
+            )
 
-        for projectile in enemy_projectiles:
-            projectile.draw(screen)
+            player_center = pg.Vector2(
+                player.center
+            )
 
-        for item in items:
-            item.draw(screen)
+            aim_direction = (
+                mouse_position
+                - player_center
+            )
 
-        for enemy in enemies:
-            enemy.draw(screen)
+            if aim_direction.length_squared() > 0:
 
-        draw_communication_debug(screen)
+                aim_direction.normalize_ip()
 
-        if game_state == GAME_STATE_COMPLETE:
-            draw_wave_complete(screen)
+                aim_end = (
+                    player_center
+                    + aim_direction * 35
+                )
 
-        if game_state == GAME_STATE_UPGRADE:
-            draw_upgrade_screen(screen)
+                pg.draw.line(
+                    screen,
+                    (255, 255, 255),
+                    player_center,
+                    (
+                        round(aim_end.x),
+                        round(aim_end.y)
+                    ),
+                    3
+                )
 
-        if game_state == GAME_STATE_GAME_OVER:
-            draw_game_over(screen)
+            for bullet in bullets:
+                bullet.draw(screen)
 
-    pg.display.flip()
+            for projectile in enemy_projectiles:
+                projectile.draw(screen)
+
+            for item in items:
+                item.draw(screen)
+
+            for enemy in enemies:
+                enemy.draw(screen)
+
+            draw_communication_debug(screen)
+
+            if game_state == GAME_STATE_COMPLETE:
+                draw_wave_complete(screen)
+
+            if game_state == GAME_STATE_UPGRADE:
+                draw_upgrade_screen(screen)
+
+            if game_state == GAME_STATE_GAME_OVER:
+                draw_game_over(screen)
+
+        pg.display.flip()
 
 
-# ============================================================
-# EXIT
-# ============================================================
+    # ============================================================
+    # EXIT
+    # ============================================================
 
-pg.quit()
+    pg.quit()
