@@ -380,6 +380,7 @@ WITCH_TELEPORT_ATTEMPTS = 20
 WITCH_ABILITY_FLASH_TIME = 0.35
 
 
+# ============================================================
 # ENEMY SPAWN PROBABILITY
 # ============================================================
 
@@ -5329,8 +5330,17 @@ def draw_weapon_shop(screen):
 # ============================================================
 
 def run_game():
-
-    global running
+    
+    global player_damage_timer
+    global weapon_fire_timer
+    global game_state
+    global wave_number
+    global wave_complete_timer
+    global wave_complete_number
+    global spawn_timer
+    global player_health
+    global player_ammo
+    global player_coins
 
     running = True
 
