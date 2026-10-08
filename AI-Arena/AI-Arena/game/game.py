@@ -2,6 +2,9 @@ import pygame as pg
 import random
 import math
 
+from game.player import Player
+from game.weapons import WeaponManager
+
 
 # ============================================================
 # INITIALIZATION
@@ -519,19 +522,14 @@ def drop_item(enemy):
 # PLAYER
 # ============================================================
 
-player = pg.Rect(
-    0,
-    0,
+player = Player(
+    SAFE_ZONE.center,
     PLAYER_WIDTH,
-    PLAYER_HEIGHT
+    PLAYER_HEIGHT,
+    player_stats
 )
 
-player.center = SAFE_ZONE.center
-
-player_pos = pg.Vector2(
-    player.center
-)
-
+player_pos = player.pos
 
 # ============================================================
 # GLOBAL OBJECT LISTS
@@ -4702,8 +4700,7 @@ def reset_game():
 
 player_coins = 0
 
-owned_weapons = {"pistol"}
-equipped_weapon = "pistol"
+weapon_manager = WeaponManager()
 
 WAVE_REWARDS = {
     1: 10,
@@ -4792,9 +4789,8 @@ def equip_weapon(weapon_id):
 
 def get_current_weapon():
 
-    return PLAYER_WEAPONS[
-        equipped_weapon
-    ]
+    return weapon_manager.get_current_weapon()
+    
 
 # ============================================================
 # HOME SCREEN
