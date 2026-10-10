@@ -4,6 +4,7 @@ import math
 
 from game.player import Player
 from game.weapons import WeaponManager
+from game.projectiles import Bullet, EnemyProjectile
 
 
 # ============================================================
@@ -1230,285 +1231,6 @@ def has_line_of_sight(
 
 
 # ============================================================
-# PLAYER BULLET
-# ============================================================
-
-class Bullet:
-
-    def __init__(
-        self,
-        position,
-        direction
-    ):
-
-        self.position = pg.Vector2(
-            position
-        )
-
-        self.direction = pg.Vector2(
-            direction
-        )
-
-        if self.direction.length_squared() > 0:
-
-            self.direction.normalize_ip()
-        
-        weapon = get_current_weapon()
-
-        self.speed = (
-            weapon["bullet_speed"]
-            * player_stats["projectile_speed_multiplier"]
-        )
-
-        self.damage = (
-            weapon["damage"]
-            * player_stats["damage_multiplier"]
-        )
-
-        self.range = weapon["range"]
-
-        self.radius = weapon[
-            "bullet_radius"
-        ]
-        
-        self.distance_traveled = 0
-
-        self.alive = True
-
-    def update(
-        self,
-        dt,
-        walls
-    ):
-
-        if not self.alive:
-            return
-
-        movement = (
-            self.direction
-            * self.speed
-            * dt
-        )
-
-        distance = movement.length()
-
-        steps = max(
-            1,
-            math.ceil(distance / 5)
-        )
-
-        step = movement / steps
-
-        for _ in range(steps):
-
-            self.position += step
-
-            self.distance_traveled += (
-                step.length()
-            )
-
-            if not PLAY_AREA.collidepoint(
-                round(self.position.x),
-                round(self.position.y)
-            ):
-
-                self.alive = False
-                return
-
-            for wall in walls:
-
-                if wall.collidepoint(
-                    round(self.position.x),
-                    round(self.position.y)
-                ):
-
-                    self.alive = False
-                    return
-
-            if (
-                self.distance_traveled
-                >= self.range
-            ):
-
-                self.alive = False
-                return
-
-    def draw(self, screen):
-
-        if not self.alive:
-            return
-
-        pg.draw.circle(
-            screen,
-            (255, 220, 80),
-            (
-                round(self.position.x),
-                round(self.position.y)
-            ),
-            self.radius
-        )
-
-
-# ============================================================
-# ENEMY PROJECTILE
-# ============================================================
-
-class EnemyProjectile:
-
-    def __init__(
-        self,
-        position,
-        direction,
-        damage,
-        speed,
-        max_range,
-        radius,
-        color
-    ):
-
-        self.position = pg.Vector2(
-            position
-        )
-
-        self.direction = pg.Vector2(
-            direction
-        )
-
-        if self.direction.length_squared() > 0:
-
-            self.direction.normalize_ip()
-
-        self.damage = damage
-        self.speed = speed
-        self.max_range = max_range
-        self.radius = radius
-        self.color = color
-
-        self.distance_traveled = 0
-        self.alive = True
-
-    def update(
-        self,
-        dt,
-        walls,
-        player
-    ):
-
-        if not self.alive:
-            return
-
-        movement = (
-            self.direction
-            * self.speed
-            * dt
-        )
-
-        distance = movement.length()
-
-        steps = max(
-            1,
-            math.ceil(distance / 5)
-        )
-
-        step = movement / steps
-
-        for _ in range(steps):
-
-            self.position += step
-
-            self.distance_traveled += (
-                step.length()
-            )
-
-            if not PLAY_AREA.collidepoint(
-                round(self.position.x),
-                round(self.position.y)
-            ):
-
-                self.alive = False
-                return
-
-            projectile_rect = pg.Rect(
-                int(
-                    self.position.x
-                    - self.radius
-                ),
-                int(
-                    self.position.y
-                    - self.radius
-                ),
-                self.radius * 2,
-                self.radius * 2
-            )
-
-            for wall in walls:
-
-                if projectile_rect.colliderect(
-                    wall
-                ):
-
-                    self.alive = False
-                    return
-
-            if (
-                self.distance_traveled
-                >= self.max_range
-            ):
-
-                self.alive = False
-                return
-
-            closest_x = max(
-                player.left,
-                min(
-                    self.position.x,
-                    player.right
-                )
-            )
-
-            closest_y = max(
-                player.top,
-                min(
-                    self.position.y,
-                    player.bottom
-                )
-            )
-
-            distance_to_player = math.hypot(
-                self.position.x - closest_x,
-                self.position.y - closest_y
-            )
-
-            if (
-                distance_to_player
-                <= self.radius
-            ):
-
-                damage_player(
-                    self.damage
-                )
-
-                self.alive = False
-
-                return
-
-    def draw(self, screen):
-
-        if not self.alive:
-            return
-
-        pg.draw.circle(
-            screen,
-            self.color,
-            (
-                round(self.position.x),
-                round(self.position.y)
-            ),
-            self.radius
-        )
-
-
-# ============================================================
 # ENEMY
 # ============================================================
 
@@ -2652,7 +2374,8 @@ class Enemy:
                     weapon["projectile_speed"],
                     weapon["projectile_range"],
                     weapon["projectile_radius"],
-                    weapon["projectile_color"]
+                    weapon["projectile_color"],
+                    PLAY_AREA
                 )
             )
 
@@ -4621,7 +4344,10 @@ def shoot():
         bullets.append(
             Bullet(
                 bullet_start,
-                shot_direction
+                shot_direction,
+                get_current_weapon(),
+                player_stats,
+                PLAY_AREA
             )
         )
 
@@ -4761,30 +4487,17 @@ def buy_weapon(weapon_id):
 
     global player_coins
 
-    if weapon_id not in PLAYER_WEAPONS:
-        return
-
-    if weapon_id in owned_weapons:
-        return
-
-    weapon = PLAYER_WEAPONS[weapon_id]
-
-    if player_coins >= weapon["cost"]:
-
-        player_coins -= weapon["cost"]
-
-        owned_weapons.add(
-            weapon_id
-        )
+    player_coins, purchased = weapon_manager.buy_weapon(
+        weapon_id,
+        player_coins
+    )
 
 
 def equip_weapon(weapon_id):
 
-    global equipped_weapon
-
-    if weapon_id in owned_weapons:
-
-        equipped_weapon = weapon_id
+    weapon_manager.equip_weapon(
+        weapon_id
+    )
 
 
 def get_current_weapon():
@@ -5093,12 +4806,12 @@ def draw_weapon_shop(screen):
 
         owned = (
             weapon_id
-            in owned_weapons
+            in weapon_manager.owned_weapons
         )
 
         equipped = (
             weapon_id
-            == equipped_weapon
+            == weapon_manager.equipped_weapon
         )
 
         if equipped:
@@ -5446,7 +5159,7 @@ def run_game():
                                         weapon_ids[index]
                                     )
                                     
-                                    if weapon_id in owned_weapons:
+                                    if weapon_id in weapon_manager.owned_weapons:
                                         
                                         equip_weapon(
                                             weapon_id
